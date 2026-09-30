@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Diesel">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f1512">
+<title>Diesel Tracker</title>
+<style>
+:root{--bg:#f6f7f5;--card:#fff;--fg:#141a16;--mut:#6b756e;--acc:#1f7a4d;--line:#dfe4e0;--heb:#d6452b}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1512;--card:#182019;--fg:#eef2ee;--mut:#8a978e;--acc:#4cc98a;--line:#28332b;--heb:#ff7a5c}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:16px/1.4 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;
+padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+main{max-width:760px;margin:0 auto}
+h1{font-size:15px;font-weight:600;color:var(--mut);margin:4px 0 12px;letter-spacing:.02em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.hl{font-size:44px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.sub{color:var(--mut);font-size:14px;min-height:20px;margin-bottom:12px}
+.row{display:flex;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.seg{display:flex;background:var(--bg);border-radius:10px;padding:2px}
+.seg button{border:0;background:none;color:var(--mut);font:inherit;font-size:14px;padding:6px 12px;border-radius:8px;cursor:pointer}
+.seg button.on{background:var(--card);color:var(--fg);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+svg{width:100%;height:auto;display:block;touch-action:pan-y;user-select:none;-webkit-user-select:none;cursor:crosshair}
+summary{cursor:pointer;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
+label{font-size:12px;color:var(--mut);display:block}
+input{width:100%;font:inherit;font-size:16px;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+#out{font-variant-numeric:tabular-nums}
+@media(min-width:700px){.hl{font-size:56px}}
+</style></head><body><main>
+<h1 id="ttl">Diesel</h1>
+<section class="card">
+  <div id="hl" class="hl">&nbsp;</div>
+  <div id="sub" class="sub"></div>
+  <div class="row">
+    <div class="seg" id="mode"><button data-m="all" class="on">All</button><button data-m="heb">HEB</button></div>
+    <div class="seg" id="rng"><button data-r="7">1W</button><button data-r="30">1M</button><button data-r="90">3M</button><button data-r="0" class="on">All</button></div>
+  </div>
+  <svg id="chart" viewBox="0 0 340 190"></svg>
+</section>
+<details class="card"><summary>Fill-up calculator</summary>
+  <div class="grid">
+    <div><label for="g">Gallons</label><input id="g" type="number" inputmode="decimal" min="0"></div>
+    <div><label for="m">Miles</label><input id="m" type="number" inputmode="decimal" min="0"></div>
+    <div><label for="mpg">MPG</label><input id="mpg" type="number" inputmode="decimal" min="0"></div>
+  </div>
+  <div id="out">Enter gallons, or miles + MPG. Uses the price selected above.</div>
+</details>
+</main>
+<script>
+const $=s=>document.querySelector(s), W=340,H=190,P={l:8,r:8,t:14,b:24};
+let S=[],mode='all',rng=0,idx=null,XS=[];
+const k=()=>mode, DAY=864e5;
+const fmt=d=>d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+const fmtL=d=>d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+
+function parseCSV(t){const rows=[];let r=[],f='',q=false;
+  for(let i=0;i<t.length;i++){const c=t[i];
+    if(q){if(c=='"'){if(t[i+1]=='"'){f+='"';i++}else q=false}else f+=c}
+    else if(c=='"')q=true;else if(c==','){r.push(f);f=''}
+    else if(c=='\n'){r.push(f);rows.push(r);r=[];f=''}else if(c!='\r')f+=c}
+  if(f||r.length){r.push(f);rows.push(r)}
+  const h=rows.shift();return rows.map(v=>Object.fromEntries(h.map((x,i)=>[x,v[i]])))}
+
+async function load(){
+  const m=location.hostname.match(/^(.+)\.github\.io$/), repo=location.pathname.split('/')[1];
+  // read data straight from the repo so the page is fresh even if Pages hasn't rebuilt
+  const bases=(m&&repo)?[`https://raw.githubusercontent.com/${m[1]}/${repo}/main/data/`,'data/']:['data/'];
+  for(const b of bases){try{const r=await fetch(b+'runs.csv');if(r.ok)return parseCSV(await r.text())}catch(e){}}
+  throw new Error('no data');}
+
+function series(){
+  const key=k(), last=S[S.length-1].d;
+  return S.filter(p=>p[key]!=null&&(rng==0||last-p.d<=rng*DAY));}
+
+function draw(){
+  const pts=series(), key=k(), sv=$('#chart');
+  if(!pts.length){sv.innerHTML='';$('#hl').textContent='—';$('#sub').textContent='No data for this view yet.';return}
+  const ys=pts.map(p=>p[key]);let lo=Math.min(...ys),hi=Math.max(...ys);
+  if(hi-lo<.05){lo-=.05;hi+=.05}const pad=(hi-lo)*.2;lo-=pad;hi+=pad;
+  const t0=pts[0].d,t1=pts[pts.length-1].d,span=Math.max(t1-t0,1),iw=W-P.l-P.r;
+  XS=pts.map(p=>P.l+(pts.length==1?iw/2:(p.d-t0)/span*iw));
+  const Y=v=>P.t+(hi-v)/(hi-lo)*(H-P.t-P.b), c=key=='heb'?'var(--heb)':'var(--acc)';
+  const sel=idx==null||idx>=pts.length?pts.length-1:idx, sp=pts[sel], prev=pts[sel-1];
+  const path=pts.map((p,i)=>(i?'L':'M')+XS[i].toFixed(1)+','+Y(p[key]).toFixed(1)).join('');
+  sv.innerHTML=`<path d="${path}" style="fill:none;stroke:${c};stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round"/>`
+   +(idx!=null?`<line x1="${XS[sel]}" x2="${XS[sel]}" y1="${P.t}" y2="${H-P.b}" style="stroke:var(--mut);stroke-dasharray:3 3"/>`:'')
+   +`<circle cx="${XS[sel]}" cy="${Y(sp[key])}" r="5" style="fill:${c};stroke:var(--card);stroke-width:2"/>`
+   +`<text x="${P.l}" y="${H-6}" font-size="10" style="fill:var(--mut)">${fmt(t0)}</text>`
+   +`<text x="${W-P.r}" y="${H-6}" font-size="10" text-anchor="end" style="fill:var(--mut)">${fmt(t1)}</text>`;
+  const n=key=='heb'?sp.hn:sp.n;
+  $('#hl').textContent='$'+sp[key].toFixed(3);
+  $('#sub').textContent=fmtL(sp.d)+' · '+n+(key=='heb'?' HEB':'')+' station'+(n==1?'':'s')
+    +(prev?` · ${sp[key]>=prev[key]?'▲':'▼'} $${Math.abs(sp[key]-prev[key]).toFixed(3)}`:'');
+}
+
+function scrub(e){
+  const pts=series();if(!pts.length)return;
+  const r=$('#chart').getBoundingClientRect(),x=(e.clientX-r.left)/r.width*W;
+  let b=0,bd=1e9;XS.forEach((px,i)=>{const d=Math.abs(px-x);if(d<bd){bd=d;b=i}});idx=b;draw();}
+
+function calc(){
+  const key=k(),cur=S.filter(x=>x[key]!=null).pop();
+  const g=+$('#g').value,m=+$('#m').value,mpg=+$('#mpg').value,gal=g||(m&&mpg?m/mpg:0);
+  if(!cur||!gal){$('#out').textContent='Enter gallons, or miles + MPG. Uses the price selected above.';return}
+  const p=cur[key];let s=`${gal.toFixed(1)} gal × $${p.toFixed(3)} = <b>$${(gal*p).toFixed(2)}</b>`;
+  if(m)s+=` · $${(gal*p/m).toFixed(3)}/mi`;
+  const old=[...S].reverse().find(x=>x[key]!=null&&S[S.length-1].d-x.d>=30*DAY);
+  if(old){const d=gal*(p-old[key]);s+=`<br>${d>=0?'+':'−'}$${Math.abs(d).toFixed(2)} vs 30 days ago`}
+  $('#out').innerHTML=s;}
+
+function seg(id,attr,fn){$(id).addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+  $(id).querySelectorAll('button').forEach(x=>x.classList.toggle('on',x==b));fn(b.dataset[attr]);idx=null;draw();calc()})}
+seg('#mode','m',v=>mode=v);seg('#rng','r',v=>rng=+v);
+const sv=$('#chart');
+sv.addEventListener('pointerdown',e=>{sv.setPointerCapture(e.pointerId);scrub(e)});
+sv.addEventListener('pointermove',e=>{if(e.pointerType=='mouse'||e.buttons)scrub(e)});
+['pointerup','pointercancel','pointerleave'].forEach(t=>sv.addEventListener(t,()=>{if(idx!=null){idx=null;draw()}}));
+['g','m','mpg'].forEach(i=>$('#'+i).addEventListener('input',calc));
+
+load().then(rows=>{
+  const last=rows[rows.length-1];
+  rows=rows.filter(r=>r.zip==last.zip&&r.radius_mi==last.radius_mi); // one area only
+  const byDay={};rows.forEach(r=>byDay[new Date(r.run_ts).toLocaleDateString('en-CA')]=r);
+  S=Object.keys(byDay).sort().map(dk=>{const r=byDay[dk];
+    return{d:new Date(dk+'T12:00:00'),all:+r.fresh_median||null,heb:+r.heb_fresh_median||null,n:+r.fresh_diesel,hn:+r.heb_fresh}});
+  $('#ttl').textContent=`Diesel · ${last.zip} · ${last.radius_mi} mi · median of fresh prices`;
+  draw();calc();
+}).catch(()=>{$('#hl').textContent='—';$('#sub').textContent="Couldn't load data/runs.csv."});
+</script></body></html>
